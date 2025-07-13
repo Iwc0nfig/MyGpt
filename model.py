@@ -143,15 +143,23 @@ class CausalSelfAttention(nn.Module):
 
         #Compute attention scores → apply softmax → optionally mask → apply dropout → multiply by values.
         
-        y = torch.nn.functional.scaled_dot_product_attention(q,k,v , 
+       if self.flash:
+            y = torch.nn.functional.scaled_dot_product_attention(q,k,v , 
                                                              attn_mask=None,
                                                              dropout_p=self.dropout if self.training else 0 , 
                                                              is_causal= True)
-        
-        
-       
-        y =y.transpose(1,2).contiguous().view(B,T,C)
-        y = self.resid_dropout(y)
+        else:
+            # manual implementation of attention
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
         return y
     
 class MLP(nn.Module):
@@ -331,16 +339,18 @@ if torch.cuda.is_available():
 
 
 def get_lr(it):
-    #linear warmup 
+    # 1) linear warmup for warmup_steps steps
     if it < warmup_steps:
-        return max_lr * (it+1) / warmup_steps
-    if it > warmup_steps:
-        return min_lr
-    #in between warmup and max_steps we use cosine decay
-    decay_ration = (it-warmup_steps)/(max_steps-warmup_steps)
-    assert 0<=decay_ration <= 1, "Decay ratio should be between 0 and 1"
-    coeff = 0.5 * (1 + math.cos(math.pi * decay_ration))  # cosine decay
-    return min_lr + coeff * (max_lr - min_lr)  # linear decay from min_lr to max_lr
+        return max_lr * (it + 1) / warmup_steps
+    # 2) cosine decay to min_lr after warmup_steps
+    elif it < max_steps:
+        decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # cosine decay
+        return min_lr + coeff * (max_lr - min_lr)
+    # 3) at max_steps and beyond, return min_lr
+    else:
+        return min_lr# linear decay from min_lr to max_lr
 
 #optimer
 optimizer = model.configure_optimizers(weight_decay=1e-4,learning_rate=max_lr, betas=(0.9, 0.95), device_type=device)
