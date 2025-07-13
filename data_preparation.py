@@ -19,13 +19,25 @@ tokenizer = Tokenizer.from_file("./tokenizer/english_bpe_tokenizer.json")
 
 os.makedirs(output_dir, exist_ok=True)
 
+ascii_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,!?;:'\"()[]{-}<>@#&$%*+=_/\\|^ "
+disallowed_chars_pattern = re.compile(f'[^{re.escape(ascii_chars)}]')
 
 dataset = load_dataset(dataset_name, subset_name , streaming=True)
 dataset=dataset['train']
 
 def tokenize_batch(batch):
-    tokenized = tokenizer.encode_batch(batch['text'])
+    # Apply the same character filtering as used during tokenizer training
+    filtered_texts = []
+    for text in batch['text']:
+        # Filter out non-ASCII characters
+        filtered_text = disallowed_chars_pattern.sub('', text)
+        # Clean up whitespace
+        processed_text = filtered_text.strip().replace('\n', ' ')
+        filtered_texts.append(processed_text)
+    
+    tokenized = tokenizer.encode_batch(filtered_texts)
     return {'input_ids': [np.array(t.ids, dtype=np.uint16) for t in tokenized]}
+
 
 print(f"Starting tokenization with {num_proc} processes...")
 
