@@ -328,8 +328,8 @@ model.to(device)
 
 max_lr = 6e-4
 min_lr = max_lr*0.1
-warmup_steps = 1_500
-max_steps = 19_073
+warmup_steps = 3_000
+max_steps =  38_147
 
 print(f"Model is running on device: {device}")
 
